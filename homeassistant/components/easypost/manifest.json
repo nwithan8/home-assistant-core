@@ -1,0 +1,9 @@
+{
+  "domain": "easypost",
+  "name": "EasyPost",
+  "documentation": "https://www.home-assistant.io/integrations/easypost",
+  "requirements": ["easypost==7.6.0"],
+  "config_flow": true,
+  "codeowners": ["@nwithan8"],
+  "iot_class": "cloud_polling"
+}
