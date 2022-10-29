@@ -136,9 +136,6 @@ aioeafm==0.1.2
 # homeassistant.components.rainforest_eagle
 aioeagle==1.1.0
 
-# homeassistant.components.easypost
-easypost==7.6.0
-
 # homeassistant.components.ecowitt
 aioecowitt==2022.09.3
 
@@ -468,6 +465,9 @@ dynalite_devices==0.1.46
 
 # homeassistant.components.rainforest_eagle
 eagle100==0.1.1
+
+# homeassistant.components.easypost
+easypost==7.6.0
 
 # homeassistant.components.elgato
 elgato==3.0.0

@@ -2,26 +2,45 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Final
 from logging import Logger, getLogger
+from typing import Final
 
 import voluptuous as vol
 
-import homeassistant.helpers.config_validation as cv
+from ...const import Platform, CONF_API_KEY, CONF_NAME
+from ...helpers import config_validation as cv
+
+LOGGER: Logger = getLogger(__package__)
 
 DEFAULT_NAME: Final = "EasyPost"
 DOMAIN: Final = "easypost"
-LOGGER: Logger = getLogger(__package__)
+EASYPOST_DATA: Final = DOMAIN
 
+# What platforms are supported by this integration?
+PLATFORMS = [Platform.SENSOR]
+
+# How often to query the EasyPost API for new data
+SENSOR_UPDATE_INTERVAL: Final = timedelta(minutes=15)
+
+# Main icon for the EasyPost integration
 ICON: Final = "mdi:package-variant-closed"
 
-MIN_TIME_BETWEEN_UPDATES: Final = timedelta(minutes=15)
+# Configuration schema for the EasyPost integration
+EASYPOST_CONFIG_ENTRY_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_API_KEY): cv.string,
+        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+    }
+)
 
+# EasyPost-specific variable names for services
 CONF_CARRIER: Final = "carrier"
 CONF_TRACKING_NUMBER: Final = "tracking_number"
 
+# Service names
 SERVICE_ADD_TRACKER: Final = "add_tracker"
 
+# Service schemas
 SERVICE_ADD_TRACKER_SCHEMA: Final = vol.Schema(
     {
         vol.Required(CONF_TRACKING_NUMBER): cv.string,
@@ -29,6 +48,7 @@ SERVICE_ADD_TRACKER_SCHEMA: Final = vol.Schema(
     }
 )
 
+# Translation table for human-readable carrier names to EasyPost carrier keys
 CARRIER_TRANSLATIONS: Final = {
     "AmazonMws": "AmazonMws",
     "APC": "APC",

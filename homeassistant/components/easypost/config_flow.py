@@ -2,97 +2,124 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
-import easypost
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow
-from homeassistant.const import CONF_API_KEY
-from homeassistant.data_entry_flow import FlowResult
+from . import EasyPostApi
+from .const import DEFAULT_NAME, DOMAIN, EASYPOST_CONFIG_ENTRY_SCHEMA
+from ...config_entries import ConfigFlow
+from ...const import CONF_API_KEY, CONF_NAME
+from ...data_entry_flow import FlowResult
 
-from .const import DEFAULT_NAME, DOMAIN
+
+async def validate_input(user_input: dict[str, Any]) -> str | None:
+    """Try connecting to EasyPost."""
+    key = user_input.get(CONF_API_KEY)
+
+    if key is None:
+        return "missing_api_key"
+
+    # noinspection PyTypeChecker
+    api = EasyPostApi(api_key=key, account_name=None)
+    if not await api.async_test_api():
+        return "invalid_api_key"  # TODO: Handle different errors
+
+    return None
 
 
 class EasyPostConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for EasyPost."""
 
     VERSION = 1
+    CONFIG_SCHEMA = EASYPOST_CONFIG_ENTRY_SCHEMA
+
+    def __init__(self):
+        """Initialize EasyPost config flow."""
+        self._account_name: str | None = None
+        self._api_key: str | None = None
 
     async def async_step_user(
             self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle a flow initiated by the user."""
-        errors = {}
-        if user_input is not None:
-            # User has provided input data
-            # Skip if EasyPost is already configured with the same API key
-            self._async_abort_entries_match({CONF_API_KEY: user_input[CONF_API_KEY]})
-            # Validate input
-            if (error := await self.validate_input(user_input)) is None:
-                # Input is valid, create entry
-                return self.async_create_entry(
-                    title=DEFAULT_NAME,
-                    data=user_input,
-                )
-            # Input is invalid, show error
-            errors["base"] = error
+        if self._async_current_entries():
+            # Currently only allow one config entry
+            return self.async_abort(reason="single_instance_allowed")
 
-        user_input = user_input or {}
-        data_schema = {
-            vol.Required(CONF_API_KEY, default=user_input.get(CONF_API_KEY, "")): str,
-        }
+        if user_input is None:
+            # Show form
+            return self.async_show_form(
+                step_id="user",
+                data_schema=vol.Schema(self.CONFIG_SCHEMA),
+                errors={},
+            )
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(data_schema),
-            errors=errors or {},
-        )
+        validation_error: str | None = await validate_input(user_input=user_input)
+        if validation_error:
+            # Show form again with error(s)
+            return self.async_show_form(
+                step_id="user",
+                data_schema=vol.Schema(self.CONFIG_SCHEMA),  # Fields will be erased
+                errors={CONF_API_KEY: validation_error}
+            )
+
+        # Store user input data
+        self._api_key = user_input[CONF_API_KEY]
+        self._account_name = user_input.get(CONF_NAME, DEFAULT_NAME)
+
+        # Save entry as new or update existing
+        return await self._async_create_update_easypost_account_entry()
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
-        """Handle a reauthorization flow request."""
+        """Handle reauthorization request from Abode."""
+        self._account_name = entry_data[CONF_NAME]
+
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
-            self, user_input: dict[str, str] | None = None
+            self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Confirm reauth dialog."""
-        errors = {}
-        # User has provided input data and configuration already exists
-        if user_input is not None and (
-                entry := self.hass.config_entries.async_get_entry(self.context["entry_id"])
-        ):
-            _input = {**entry.data, CONF_API_KEY: user_input[CONF_API_KEY]}
-            if (error := await self.validate_input(_input)) is None:
-                # Input is valid, update entry
-                self.hass.config_entries.async_update_entry(entry, data=_input)
-                await self.hass.config_entries.async_reload(entry.entry_id)
-                return self.async_abort(reason="reauth_successful")
-            errors["base"] = error
-        # Show reauth dialog
-        return self.async_show_form(
-            step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_API_KEY): str}),
-            errors=errors,
-        )
+        """Handle reauthorization flow."""
+        if user_input is None:
+            # Show form
+            return self.async_show_form(
+                step_id="reauth_confirm",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(CONF_API_KEY): str,
+                        vol.Required(CONF_NAME, default=self._account_name): str,
+                    }
+                ),
+            )
 
-    async def validate_input(self, user_input: dict[str, Any]) -> str | None:
-        """Try connecting to EasyPost."""
-        key = user_input.get(CONF_API_KEY)
-        if key is None:
-            return "missing_api_key"
-        # Set API key globally
-        easypost.api_key = key
-        # Test connection
-        try:
-            easypost_user = easypost.User.retrieve_me()
-            if easypost_user is None:
-                # API could not pull user, assume invalid API key
-                easypost.api_key = None # Reset API key
-                return "invalid_api_key"
-        except Exception:
-            # API threw an exception, assume invalid API key
-            easypost.api_key = None  # Reset API key
-            return "invalid_api_key"
-        easypost.api_key = None  # Reset API key
-        return None
+        # Store user input data
+        self._account_name = user_input.get(CONF_NAME, DEFAULT_NAME)
+        self._api_key = user_input[CONF_API_KEY]
+
+        # Save entry as new or update existing
+        return await self._async_create_update_easypost_account_entry()
+
+    async def _async_create_update_easypost_account_entry(self) -> FlowResult:
+        """Create or update an EasyPost account entry."""
+        config_data = {
+            CONF_API_KEY: self._api_key,
+            CONF_NAME: self._account_name,
+        }
+
+        existing_entry = await self.async_set_unique_id(unique_id=self._account_name)
+        if existing_entry:
+            self.hass.config_entries.async_update_entry(
+                entry=existing_entry,
+                data=config_data,
+            )
+            # Reload the EasyPost config entry otherwise devices will remain unavailable
+            self.hass.async_create_task(
+                self.hass.config_entries.async_reload(entry_id=existing_entry.entry_id)
+            )
+            return self.async_abort(reason="reauth_successful")
+
+        return self.async_create_entry(
+            title=cast(str, self._account_name),
+            data=config_data,
+        )

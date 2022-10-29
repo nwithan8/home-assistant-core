@@ -1007,6 +1007,11 @@
       "iot_class": "cloud_polling",
       "name": "Environment Agency Flood Gauges"
     },
+    "easypost": {
+      "config_flow": true,
+      "iot_class": "cloud_polling",
+      "name": "EasyPost"
+    },
     "ebox": {
       "config_flow": false,
       "iot_class": "cloud_polling",

@@ -1,29 +1,55 @@
-"""The EasyPost integration."""
-from __future__ import annotations
+"""The EasyPost component."""
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_API_KEY, Platform
-from homeassistant.core import HomeAssistant
-
-from .const import DOMAIN
+from .api import EasyPostApi
+from .const import DOMAIN, EASYPOST_DATA, EASYPOST_CONFIG_ENTRY_SCHEMA, LOGGER, SENSOR_UPDATE_INTERVAL
 from .coordinator import EasyPostDataUpdateCoordinator
+from .services import register_global_services, register_per_account_services
+from ...const import CONF_API_KEY, CONF_NAME, Platform
+from ...core import HomeAssistant
+from ...helpers import discovery
+from ...helpers.typing import ConfigType
 
-PLATFORMS = [Platform.SENSOR]
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up the EasyPost package shipping component."""
+    LOGGER.debug("Setting up EasyPost integration")
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up EasyPost from a config entry."""
-    api_key: str = entry.data[CONF_API_KEY]
-    coordinator: EasyPostDataUpdateCoordinator = EasyPostDataUpdateCoordinator(hass=hass, api_key=api_key)
-    await coordinator.async_config_entry_first_refresh()
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Initialize the configuration data
+    hass.data.setdefault(EASYPOST_DATA, {})
+
+    for user_account in config[DOMAIN]:
+        # Extract credentials from each user account config entry
+        account_name: str = user_account[CONF_NAME]
+        api_key: str = user_account[CONF_API_KEY]
+
+        # Create the EasyPost API handler
+        easypost_api = EasyPostApi(
+            api_key=api_key,
+            account_name=account_name
+        )
+
+        # Store the API handler in hass.data
+        hass.data[EASYPOST_DATA][account_name] = easypost_api
+
+        # Load a sensor platform for each EasyPost account
+        hass.async_create_task(
+            discovery.async_load_platform(
+                hass=hass,
+                component=Platform.SENSOR,
+                platform=DOMAIN,
+                discovered={CONF_NAME: account_name},
+                hass_config=config,
+            )
+        )
+
+        # Start account-specific services
+        register_per_account_services(hass=hass, easypost_account_config=user_account)
+
+    # If no configurations entries exist (have been made), setup has failed
+    if not hass.data[EASYPOST_DATA]:
+        return False
+
+    # Start global (account-agnostic) EasyPost services
+    register_global_services(hass=hass, easypost_global_config=config)
 
     return True
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return unload_ok

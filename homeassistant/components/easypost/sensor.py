@@ -1,71 +1,36 @@
 """A platform which allows you to get information from EasyPost."""
 from __future__ import annotations
 
-import datetime
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast, List
 
 import easypost
 
-from homeassistant.components.sensor import (
+from .const import (
+    DEFAULT_NAME,
+    DOMAIN,
+    EASYPOST_DATA,
+    SENSOR_UPDATE_INTERVAL,
+)
+from .coordinator import EasyPostDataUpdateCoordinator
+from .utils import _from_date, _get_last_location_for_tracker, _get_last_update_time_for_tracker
+from ...components.sensor import (
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory, DeviceInfo, EntityDescription
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
-from homeassistant.helpers.device_registry import DeviceEntryType
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
-from .const import (
-    DEFAULT_NAME,
-    DOMAIN,
-    SERVICE_ADD_TRACKER,
-    SERVICE_ADD_TRACKER_SCHEMA,
-)
-from .coordinator import EasyPostDataUpdateCoordinator
-from .services import handle_add_tracker, register_services
-from ...const import CONF_API_KEY
+from ...const import CONF_NAME
+from ...core import HomeAssistant
+from ...helpers.device_registry import DeviceEntryType
+from ...helpers.entity import EntityCategory, DeviceInfo, EntityDescription
+from ...helpers.entity_platform import AddEntitiesCallback
+from ...helpers.typing import ConfigType, DiscoveryInfoType, StateType
+from ...helpers.update_coordinator import CoordinatorEntity
 
 
-def get_last_location(
-        tracker: easypost.Tracker
-) -> str | None:
-    """Get last location."""
-    value = None
-    if tracker.tracking_details:
-        last_location_update = tracker.tracking_details[-1]
-        location = last_location_update.tracking_location
-        city = location.city
-        state = location.state
-        country = location.country
-        value = f"{city}, {state}, {country}"
-    return value
-
-
-def get_last_update_time(
-        tracker: easypost.Tracker
-) -> str | None:
-    """Get last update time."""
-    value = None
-    if tracker.tracking_details:
-        last_location_update = tracker.tracking_details[-1]
-        update_time = last_location_update.datetime
-        value = from_date(date=update_time)
-    return value
-
-
-def from_date(date: datetime.datetime, template: str = "%Y-%m-%d %H:%M") -> str | None:
-    if date:
-        if isinstance(date, datetime.datetime):
-            return date.strftime(template)
-        if isinstance(date, str):
-            return date
-    return None
+# https://developers.home-assistant.io/docs/integration_fetching_data/
+# SCAN_INTERVAL = SENSOR_UPDATE_INTERVAL
 
 
 class EasyPostEntity(CoordinatorEntity[EasyPostDataUpdateCoordinator]):
@@ -196,7 +161,7 @@ TRACKER_SENSOR_TYPES: tuple[EasyPostTrackerSensorEntityDescription, ...] = (
         native_unit_of_measurement=None,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda tracker: from_date(date=tracker.updated_at, template="%Y-%m-%d")
+        value_fn=lambda tracker: _from_date(date=tracker.updated_at, template="%Y-%m-%d")
     ),
     EasyPostTrackerSensorEntityDescription(
         icon="mdi:barcode",
@@ -223,7 +188,7 @@ TRACKER_SENSOR_TYPES: tuple[EasyPostTrackerSensorEntityDescription, ...] = (
         native_unit_of_measurement=None,
         entity_category=None,
         entity_registry_enabled_default=True,
-        value_fn=lambda tracker: get_last_location(tracker=tracker),
+        value_fn=lambda tracker: _get_last_location_for_tracker(tracker=tracker),
     ),
     EasyPostTrackerSensorEntityDescription(
         icon="mdi:update",
@@ -232,7 +197,7 @@ TRACKER_SENSOR_TYPES: tuple[EasyPostTrackerSensorEntityDescription, ...] = (
         native_unit_of_measurement=None,
         entity_category=None,
         entity_registry_enabled_default=True,
-        value_fn=lambda tracker: get_last_update_time(tracker=tracker),
+        value_fn=lambda tracker: _get_last_update_time_for_tracker(tracker=tracker),
     ),
     EasyPostTrackerSensorEntityDescription(
         icon="mdi:weight",
@@ -250,7 +215,7 @@ TRACKER_SENSOR_TYPES: tuple[EasyPostTrackerSensorEntityDescription, ...] = (
         native_unit_of_measurement=None,
         entity_category=None,
         entity_registry_enabled_default=True,
-        value_fn=lambda tracker: from_date(date=tracker.est_delivery_date, template="%Y-%m-%d")
+        value_fn=lambda tracker: _from_date(date=tracker.est_delivery_date, template="%Y-%m-%d")
     ),
     EasyPostTrackerSensorEntityDescription(
         icon="mdi:truck",
@@ -273,38 +238,39 @@ TRACKER_SENSOR_TYPES: tuple[EasyPostTrackerSensorEntityDescription, ...] = (
 )
 
 
+# noinspection PyUnusedLocal
 async def async_setup_platform(
         hass: HomeAssistant,
         config: ConfigType,
         async_add_entities: AddEntitiesCallback,
         discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Initialize the EasyPost platform."""
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_IMPORT}, data=config
+    """Set up the EasyPost sensors for a specific account."""
+    if discovery_info is None:
+        return
+
+    name = discovery_info[CONF_NAME]
+    api_handler = hass.data[EASYPOST_DATA][name]
+
+    # Create coordinator to update data from EasyPost API
+    easypost_data_coordinator: EasyPostDataUpdateCoordinator = \
+        EasyPostDataUpdateCoordinator(
+            hass=hass,
+            api=api_handler,
+            update_interval=SENSOR_UPDATE_INTERVAL
         )
-    )
 
-    await register_services(hass, config)
-
-
-async def async_setup_entry(
-        hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
-) -> None:
-    """Set up EasyPost sensors."""
-    coordinator: EasyPostDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: List[EasyPostSensor | EasyPostTrackerSensor] = []
-    # Add general EasyPost sensors
+    # Add general EasyPost sensors for the account
     for description in SENSOR_TYPES:
         entities.append(
-            EasyPostSensor(coordinator, description)
+            EasyPostSensor(easypost_data_coordinator, description)
         )
-    # Add EasyPost tracker sensor for each valid tracker
-    if coordinator.trackers:
-        for tracker in coordinator.trackers:
+    # Add EasyPost tracker sensor for each valid tracker in the account
+    if easypost_data_coordinator.trackers:
+        for tracker in easypost_data_coordinator.trackers:
             for description in TRACKER_SENSOR_TYPES:
                 entities.append(
-                    EasyPostTrackerSensor(coordinator, description, tracker)
+                    EasyPostTrackerSensor(easypost_data_coordinator, description, tracker)
                 )
-    async_add_entities(entities)
+    async_add_entities(entities, True)  # True triggers initial data update prior to adding entities
